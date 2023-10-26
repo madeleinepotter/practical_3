@@ -1,0 +1,554 @@
+## 3.5.1 Changing Projections 
+
+Download a geopackage for vector of Australia.
+Seeing what is inside it using st_layers*()
+
+```{r}
+
+#packages
+library(sf)
+library(here)
+
+install.packages(c("sf", "tmap", "tmaptools", "RSQLite", "tidyverse"))
+install.packages("dplyr")
+install.packages("readr")
+install.packages("tidyverse")
+library("tidyverse")
+library("readr")
+library("dplyr")
+
+#spatial data packages
+
+install.packages("maptools")
+install.packages(c("classInt", "tmap"))
+
+# might also need these ones
+install.packages(c("RColorBrewer", "sp", "rgeos", 
+                   "tmaptools", "sf", "downloader", "rgdal", 
+                   "geojsonio"))
+
+library(maptools)
+library(RColorBrewer)
+library(classInt)
+library(sp)
+library(rgeos)
+library(tmap)
+library(tmaptools)
+library(sf)
+library(rgdal)
+library(geojsonio)
+
+
+
+#from practical
+
+library(sf)
+library(here)
+st_layers(here("prac3_data", "gadm36_AUS.gpkg"))
+```
+Now read in the GeoPackage layer for the whole of Australia 
+
+```{r}
+library(sf)
+Ausoutline <- st_read(here("prac3_data", "gadm36_AUS.gpkg"), 
+                      layer='gadm36_AUS_0')
+                      
+```
+we can check the coordinate reference systems of sf or sp objects using the print function:
+
+```{r}
+print(Ausoutline)
+```
+here, the coordinate reference system is in Geodetic CRS: WGS 84. Geodetic means geographic. 
+
+Another way of identifying the CRS is to find the proj4 string. A proj4 string is meant to be a compact way of identifying a coordinate reference system.
+```{r}
+library(sf)
+st_crs(Ausoutline)$proj4string
+```
+if our data didn't have a spatial reference system, we could have just set it using st_set_crs()
+
+this works by erasing what was there before and replacing it with the crs you want. 
+
+however it is only useful if there is no CRS when you load the data.
+
+```{r}
+Ausoutline <- Ausoutline %>%
+  st_set_crs(., 4326)
+
+# or more concisely
+
+Ausoutline <- st_read(here("prac3_data", "gadm36_AUS.gpkg"), 
+                      layer='gadm36_AUS_0') %>% 
+  st_set_crs(4326)
+
+```
+## Reprojecting your spatial data
+
+For generating maps in packages like leaflet, maps need to be in WGS84 rather than a projected flat reference system.
+
+But projected reference systems are useful for things such as measuring the distance of a line object, or the distance between two polygons. 
+
+
+Once your data has a coordinate system, we can re-project or transform to anything we like. 
+Using st_transform
+
+3112 is the EPSG code
+```{r}
+AusoutlinePROJECTED <- Ausoutline %>%
+  st_transform(.,3112)
+
+print(AusoutlinePROJECTED)
+```
+you might encounter an sp object from the sp package. in this case i'd advise just transforming the sp object to sf and changing the projection
+
+```{r}
+#from sf to sp
+AusoutlineSP <- Ausoutline %>%
+  as(., "Spatial")
+
+#From sp to sf
+AusoutlineSF <- AusoutlineSP %>%
+  st_as_sf()
+```
+
+## 3.5.2 WorldClim Data
+
+loading in raster data from worldclim for precipitation at 5m resolution
+```{r}
+library(raster)
+library(terra)
+
+jan <- terra::rast(here("prac3_data", "wc2.1_5m_prec", "wc2.1_5m_prec_01.tif"))
+  
+jan
+
+plot(jan)
+```
+#### reprojecting 
+
+to reproject a raster, the whole grid must be recomputed, and the attributes then reestimated to a new grid. 
+
+we have to use the project() from the terra package. 
+
+```{r}
+# set the proj 4 to a new object
+
+pr1 <- terra::project(jan, "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs")
+
+#or....
+
+newproj<-"ESRI:54009"
+# get the jan raster and give it the new proj4
+pr1 <- jan %>%
+  terra::project(., newproj)
+plot(pr1)
+```
+
+plotting back to WGS84
+
+```{r}
+
+pr1 <- pr1 %>%
+  terra::project(., "EPSG:4326")
+plot(pr1)
+
+```
+## 3.5.3 Data loading
+
+1. list all the files stored within our directory with dir_info() from the fs package, then use dplyr in conjunction with str_detect() from stringr to search for filenames containing tif. 
+
+FIRST, dir_info()
+```{r}
+#look in our folder, find the files that end with .tif
+
+library(fs)
+dir_info("prac3_data/")
+
+```
+we can use this with dplyr to select the data we actually want. select() exists both within dplyr and raster package so make sure you use the right one.
+
+using dplyr::select forces select from dplyr
+
+```{r}
+
+# pull() from dplyr is the same as $ often used to extract columns, as in the next stage the input must be file names as characters (nothing else like a column name)
+
+library(tidyverse)
+listfiles<-dir_info("prac3_data/wc2.1_5m_prec") %>%
+  filter(str_detect(path, ".tif")) %>%
+  dplyr::select(path)%>%
+  pull()
+
+#have a look at the file names
+listfiles
+```
+##SpatRaster
+
+1. then load all of the data straight into a SpatRaster. A SpatRaster is a collection of raster layers with the same spatial extent and resolution
+
+it will stack all the raster files
+
+```{r}
+worldclimtemp <- listfiles %>%
+  terra::rast()
+
+#look at the raster stack
+worldclimtemp
+```
+under dimensions it says there are 12 layers (nlyr). the stack has loaded 12 months of average percipitation data for us in order.
+
+## to access single layers within a stack:
+
+```{r}
+#to access the january layer
+worldclimtemp[[1]]
+```
+## rename our layers within the stack
+
+```{r}
+month <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+names(worldclimtemp) <- month
+
+```
+
+## get data for just January by using our new layer name
+
+```{r}
+worldclimtemp$Jan
+```
+# 3.5.4 Raster Location
+
+using a raster stack we can extract data with a single command. 
+for example, lets make a df of some sample sites - australian cities/towns
+
+```{r}
+
+site <- c("Brisbane", "Melbourne", "Perth", "Sydney", "Broome", "Darwin", "Orange", 
+          "Bunbury", "Cairns", "Adelaide", "Gold Coast", "Canberra", "Newcastle", 
+          "Wollongong", "Logan City" )
+
+lon <- c(153.03, 144.96, 115.86, 151.21, 122.23, 130.84, 149.10, 115.64, 145.77, 
+         138.6, 153.43, 149.13, 151.78, 150.89, 153.12)
+
+lat <- c(-27.47, -37.91, -31.95, -33.87, 17.96, -12.46, -33.28, -33.33, -16.92, 
+         -34.93, -28, -35.28, -32.93, -34.42, -27.64)
+
+#Put all of this information into one list 
+
+samples <- data.frame(site, lon, lat, row.names="site")
+
+# Extract the data from the Rasterstack for all points 
+
+AUcitytemp<- terra::extract(worldclimtemp, samples)
+```
+
+add the city names to the rows of AUcitytemp
+
+```{r}
+AUcitytemp2 <- AUcitytemp %>%
+  as_tibble()%>%
+  add_column(Site = site, .before = "Jan")
+```
+
+##3.6 PART 2: Descriptive statistics
+
+## 3.6.1 Data preparation
+
+Let's take Perth as an example. We can subset our data either using the row name:
+
+```{r}
+Perthtemp <- AUcitytemp2 %>%
+  filter(site=="Perth")
+```
+
+or the row location:
+
+```{r}
+Perthtemp <- AUcitytemp2[3,]
+```
+
+##3.6.2 Histogram
+
+making a histogram of Perth's precipitation
+
+the tibble stored the data as double and the base hist() function needs it as numeric
+
+```{r}
+hist(as.numeric(Perthtemp))
+```
+## improving the aesthetics of the histogram
+
+```{r}
+library(tidyverse)
+#define where you want the breaks in the historgram
+userbreak<-c(0,25,50,100,125,150,175,200,225)
+
+# remove the ID and site columns
+Perthtemp <- AUcitytemp2 %>%
+  filter(site=="Perth")
+
+t<-Perthtemp %>%
+ dplyr::select(Jan:Dec)
+
+  hist((as.numeric(t)), 
+     breaks=userbreak, 
+     col="red", 
+     main="Histogram of Perth Temperature", 
+     xlab="Temperature", 
+     ylab="Frequency")
+```
+check the histogram information R generated
+
+```{r}
+histinfo <- as.numeric(t) %>%
+  as.numeric()%>%
+  hist(.)
+
+histinfo
+```
+here we have:
+
+breaks - cut off points for the bins
+counts - number of cells in each bin
+midpoints - middle value for each bin
+density - density of data per bin
+
+## 3.6.3 Using more data
+
+what if we wanted to see the distribution of precipitation for the whole of Australia in Jan as opposed to just our point for perth.
+
+check the layer by plotting the geometry
+
+```{r}
+plot(Ausoutline$geom)
+```
+as the .shp is quite complex (lots of points) we can simplify it with the st_simplify() function. 
+
+here the argument dTolerance controls the level of generalisation in the units of the map
+
+you can also set preserveTopology to TRUE or FALSE
+when TRUE: polygons arent removed and holes in the polygons are retained.
+
+```{r}
+AusoutSIMPLE <- Ausoutline %>%
+  st_simplify(., dTolerance = 1000) %>%
+  st_geometry()%>%
+  plot()
+```
+for best analysis, recommend using the real file to ensure you dont simplyfy a potentially important variable
+
+## next setting our map extent - where we want to clip the data
+
+however we need to make sure that both our layers are in the same coordinate reference system when we combine them
+
+```{r}
+print(Ausoutline)
+```
+```{r}
+crs(worldclimtemp)
+```
+since the crs is the same we can continue
+
+```{r}
+Austemp <- Ausoutline %>%
+  # now crop our temp data to the extent
+  terra::crop(worldclimtemp,.)
+
+# plot the output
+plot(Austemp)
+```
+if we want to just get raster data within the outline of the shape use the mask() function which uses a cookie cutter of the raster with the vector layer:
+
+```{r}
+exactAus<-terra::mask(Austemp, Ausoutline)
+```
+recomputing histogram for Australia in March
+
+```{r}
+#subset using the known location of the raster
+hist(exactAus[[3]], col="red", main ="March precipitation")
+```
+## Histogram with ggplot
+
+we need to make our raster into a data.frame to be compatible with ggplot2, using a dataframe or tibble
+
+```{r}
+
+exactAusdf <- exactAus %>%
+  as.data.frame()
+
+```
+plot the ggplot2
+
+```{r}
+library(ggplot2)
+# set up the basic histogram
+gghist <- ggplot(exactAusdf, 
+                 aes(x=Mar)) + 
+  geom_histogram(color="black", 
+                 fill="white")+
+  labs(title="Ggplot2 histogram of Australian March precipitation", 
+       x="Temperature", 
+       y="Frequency")
+# add a vertical line to the hisogram showing mean precipitation
+gghist + geom_vline(aes(xintercept=mean(Mar, 
+                                        na.rm=TRUE)),
+            color="blue", 
+            linetype="dashed", 
+            size=1)+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+## plotting multiple months of precipitation data on the same histogram
+
+we need to put variable (month) into one column using pivot_longer(). 
+
+we are saying select columns 1-12 and place them in a new column called Month and their values in another called Precip
+
+```{r}
+squishdata<-exactAusdf%>%
+  pivot_longer(
+  cols = 1:12,
+  names_to = "Month",
+  values_to = "Precip"
+)
+```
+
+then subset the data, selecting two months using filter() from dplyr
+
+```{r}
+twomonths <- squishdata %>%
+  # | = OR
+  filter(., Month=="Jan" | Month=="Jun")
+```
+
+get the mean for each month we selected, using group_by() and summarise()
+
+```{r}
+meantwomonths <- twomonths %>%
+  group_by(Month) %>%
+  summarise(mean=mean(Precip, na.rm=TRUE))
+
+meantwomonths
+```
+select colour and fill based on variable.
+the intercept is the mean we calculated
+
+```{r}
+ggplot(twomonths, aes(x=Precip, color=Month, fill=Month)) +
+  geom_histogram(position="identity", alpha=0.5)+
+  geom_vline(data=meantwomonths, 
+             aes(xintercept=mean, 
+                 color=Month),
+             linetype="dashed")+
+  labs(title="Ggplot2 histogram of Australian Jan and Jun
+       precipitation",
+       x="Precipitation",
+       y="Frequency")+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+1. drop all the NAs with drop_na()
+2. made sure that the month column has the levels spcified, which will map in descending order
+3. selected a bin width of 5 and produced a faceted plot
+
+```{r}
+data_complete_cases <- squishdata %>%
+  drop_na()%>% 
+  mutate(Month = factor(Month, levels = c("Jan","Feb","Mar",
+                                          "Apr","May","Jun",
+                                          "Jul","Aug","Sep",
+                                          "Oct","Nov","Dec")))
+
+# Plot faceted histogram
+ggplot(data_complete_cases, aes(x=Precip, na.rm=TRUE))+
+  geom_histogram(color="black", binwidth = 10)+
+  labs(title="Ggplot2 faceted histogram of Australian temperatures", 
+       x="Temperature",
+       y="Frequency")+
+  facet_grid(Month ~ .)+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+##interactive histogram using plotly
+
+```{r}
+library(raster)
+library(ggplot2)
+library(stats)
+library(plotly)
+library(graphics)
+# split the data for plotly based on month
+
+jan <- squishdata %>%
+  drop_na() %>%
+  filter(., Month=="Jan")
+
+jun <- squishdata %>%
+  drop_na() %>%
+  filter(., Month=="Jun")
+
+# give axis titles
+x <- list (title = "Temperature")
+y <- list (title = "Frequency")
+
+# set the bin width
+xbinsno<-list(start=0, end=40, size = 2.5)
+
+# plot the histogram calling all the variables we just set
+ihist<-plot_ly(alpha = 0.6) %>%
+        add_histogram(x = jan$Precip,
+        xbins=xbinsno, name="January") %>%
+        add_histogram(x = jun$Precip,
+        xbins=xbinsno, name="June") %>% 
+        layout(barmode = "overlay", xaxis=x, yaxis=y)
+
+ihist
+```
+## other descriptive stats
+
+```{r}
+# mean per month
+meanofall <- squishdata %>%
+  group_by(Month) %>%
+  summarise(mean = mean(Precip, na.rm=TRUE))
+
+# print the top 1
+head(meanofall, n=1)
+```
+```{r}
+# standard deviation per month
+sdofall <- squishdata %>%
+  group_by(Month) %>%
+  summarize(sd = sd(Precip, na.rm=TRUE))
+
+# maximum per month
+maxofall <- squishdata %>%
+  group_by(Month) %>%
+  summarize(max = max(Precip, na.rm=TRUE))
+
+# minimum per month
+minofall <- squishdata %>%
+  group_by(Month) %>%
+  summarize(min = min(Precip, na.rm=TRUE))
+
+# Interquartlie range per month
+IQRofall <- squishdata %>%
+  group_by(Month) %>%
+  summarize(IQR = IQR(Precip, na.rm=TRUE))
+
+# perhaps you want to store multiple outputs in one list..
+lotsofstats <- squishdata %>%
+  group_by(Month) %>%
+  summarize(IQR = IQR(Precip, na.rm=TRUE), 
+            max=max(Precip, na.rm=T))
+
+# or you want to know the mean (or some other stat) 
+#for the whole year as opposed to each month...
+
+meanwholeyear=squishdata %>%
+  summarize(meanyear = mean(Precip, na.rm=TRUE))
+```
+
